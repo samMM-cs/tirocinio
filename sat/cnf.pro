@@ -116,12 +116,24 @@ optimize_units(RT, Units, L) :-
       ( Units = [] -> L = sat
       ; append(Units, RT, L)
       )
+  % 1. Propagate True Units
   ; select([]-[A], RT, Rest) ->
       propagate_true(A, Rest, NewRT),
       optimize_units(NewRT, [[]-[A]|Units], L)
+  % 2. Propagate False Units
   ; select([A]-[], RT, Rest) ->
       propagate_false(A, Rest, NewRT),
       optimize_units(NewRT, [[A]-[]|Units], L)
+  % 3. Pure Literal Elimination
+  ; gather_literals(RT, AllN, AllS),
+    ord_subtract(AllN, AllS, PureN),
+    ord_subtract(AllS, AllN, PureS),
+    ( PureN \= [] ; PureS \= [] ) ->
+        eliminate_pure(PureN, PureS, RT, NewRT),
+        make_units(PureN, PureS, PureUnits),
+        append(PureUnits, Units, NewUnits),
+        optimize_units(NewRT, NewUnits, L)
+  % 4. Done optimizing, return remaining
   ; append(Units, RT, L)
   ).
 
@@ -154,5 +166,25 @@ propagate_false(A, [N-S|T], R) :-
 remove_tautologies([], []).
 remove_tautologies([N-S|T], R) :-
   ( ord_disjoint(N, S) -> R = [N-S|O]
-                        ;  R = O),
+                        ; R = O),
   remove_tautologies(T, O).
+
+% Gather all literals as ordered sets
+gather_literals([], [], []).
+gather_literals([N-S|T], AllN, AllS) :-
+    gather_literals(T, RestN, RestS),
+    ord_union(N, RestN, AllN),
+    ord_union(S, RestS, AllS).
+
+% Eliminate clauses that contain pure literals
+eliminate_pure(_, _, [], []).
+eliminate_pure(PureN, PureS, [N-S|T], R) :-
+    ( ord_intersect(PureN, N) -> eliminate_pure(PureN, PureS, T, R)
+    ; ord_intersect(PureS, S) -> eliminate_pure(PureN, PureS, T, R)
+    ; R = [N-S|NewR], eliminate_pure(PureN, PureS, T, NewR)
+    ).
+
+% Convert pure literals to unit clauses for the assignment tracker
+make_units([], [], []).
+make_units([N|Tn], S, [[N]-[]|Rest]) :- make_units(Tn, S, Rest).
+make_units([], [S|Ts], [[]-[S]|Rest]) :- make_units([], Ts, Rest).

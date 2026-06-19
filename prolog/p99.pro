@@ -569,3 +569,94 @@ test_symmetric(L) :-
   construct_bst(L, T),
   symmetric(T).
 
+sym_cbal_trees(N, TS) :- setof(T, sym_cbal_tree(N, T), TS), !.
+sym_cbal_trees(_N, []).
+
+sym_cbal_tree(N, T) :- cbal_tree(N, T), symmetric(T).
+
+sym_cbal_trees_count(N, C) :- sym_cbal_trees(N, T), length(T, C).
+
+hbal_tree(0, nil).
+hbal_tree(H, t(x, L, R)) :-
+  H #> 0,
+  H1 #= H - 1,
+  hbal_tree(H1, L),
+  hbal_tree(H1, R).
+hbal_tree(H, t(x, L, R)) :-
+  H #> 1,
+  H1 #= H - 1,
+  H2 #= H - 2,
+  hbal_tree(H1, L),
+  hbal_tree(H2, R).
+hbal_tree(H, t(x, L, R)) :-
+  H #> 1,
+  H1 #= H - 1,
+  H2 #= H - 2,
+  hbal_tree(H1, R),
+  hbal_tree(H2, L).
+
+min_nodes(0, 0).
+min_nodes(1, 1).
+min_nodes(H, N) :-
+  H #> 1,
+  H1 #= H - 1,
+  H2 #= H - 2,
+  N #= N1 + N2 + 1,
+  min_nodes(H1, N1),
+  min_nodes(H2, N2).
+
+max_height(N, H) :- max_height(N, H, 0).
+max_height(N, H, C) :-
+  min_nodes(C, M),
+  M #=< N,
+  C1 #= C + 1,
+  max_height(N, H, C1).
+max_height(N, H, C) :-
+  min_nodes(C, M),
+  M #> N,
+  H #= C - 1.
+
+hbal_tree_nodes(N, T) :-
+  min_height(N, H1),
+  max_height(N, H2),
+  between(H1, H2, H),
+  hbal_tree(H, T),
+  node_count(T, N).
+
+min_height(N, H) :-
+  H is 1 + floor(log(N) / log(2)).
+
+count_hbal_trees(N, C) :- 
+  setof(T, hbal_tree_nodes(N, T), S), 
+  length(S, C).
+
+count_leaves(nil, 0).
+count_leaves(t(_E, nil, nil), 1) :- !.
+count_leaves(t(_E, L, R), N) :-
+  N #= NL + NR,
+  count_leaves(L, NL),
+  count_leaves(R, NR).
+
+leaves(nil, []).
+leaves(t(E, nil, nil), [E]) :- !.
+leaves(t(_E, L, R), C) :-
+  leaves(L, CL),
+  leaves(R, CR),
+  append(CL, CR, C).
+
+internal(nil, []).
+internal(t(_E, nil, nil), []) :- !.
+internal(t(E, L, R), C) :-
+  internal(L, CL),
+  internal(R, CR),
+  append(CL, [E|CR], C).
+
+atlevel(nil, _, []).
+atlevel(_T, 0, []).
+atlevel(t(E, _L, _R), 1, [E]).
+atlevel(t(_E, L, R), N, A) :-
+  N #> 1,
+  N1 #= N - 1,
+  atlevel(L, N1, AL),
+  atlevel(R, N1, AR),
+  append(AL, AR, A).

@@ -2,21 +2,25 @@
 :- use_module('cnf.pro').
 :- use_module('tokenize.pro').
 :- use_module('sat_parse.pro').
+:- use_module('quantum.pro').
 :- use_module(library(janus)).
+
+% initialize the python virtual environment inside of swipl
+:- initialization((
+    (  getenv('CONDA_PREFIX', CondaEnv)
+    -> atomic_list_concat([CondaEnv, '/lib/python3.12/site-packages'], CondaSitePackages),
+       py_call(sys:path:insert(0,CondaSitePackages))    
+    ;  writeln('Warning: CONDA_PREFIX environment variable not found.')
+    )
+)).
 
 sol(S, A) :-
   tokenize(S, TOK),
   parse_sat(TOK, AST),
   cnfify(AST, CNF),
   ( CNF = unsat -> A = contradiction
-  ; CNF = sat   -> A = tautology
+  ; CNF = sat   -> A = tautology   
   ;               quantum(CNF, A)).
-
-quantum(CNF, CNF) :- 
-  py_call(pymain:main(CNF)).
-% cerca iterazioni random, oppure incrementale, oppure binary search
-
-% [([1,2,3], [4,5])]
 
 test_expr(0, "(!A || B || C) && (A || !C) && (!B)").
 test_expr(1, "A && (B || ~C)").
