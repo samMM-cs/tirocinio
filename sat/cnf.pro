@@ -1,14 +1,43 @@
-:- module(cnf, [cnfify/2]).
+:- module(cnf, [cnfify/2, cnfify/3]).
 
-% cnfify(AST, T) reduces AST to CNF and simplifies its representation
+
+% cnfify(AST, L) reduces AST to CNF and simplifies its representation,
+% applying the full optimize/2 pass (tautology removal, unit propagation,
+% pure literal elimination). Equivalent to cnfify(AST, full, L).
 cnfify(AST, L) :-
+  cnfify(AST, full, L).
+
+% cnfify(AST, Optimize, L) as above, but Optimize controls which parts of the optimize/2 pass run. It may be:
+%   full          - apply all three optimizations (same as cnfify/2)
+%   none          - apply none of them; L is the raw simplified clause list
+%   a list, any subset of [tautology, unit_propagation, pure_literal]
+%                 - apply exactly those optimizations, independently
+% e.g. cnfify(AST, [pure_literal], L) runs pure literal elimination only, skipping tautology removal and unit propagation.
+% Used to build the oracle from a partially- or un-preprocessed CNF, to measure each optimization's individual effect on circuit resource use.
+% Note: L is only ever bound to sat/unsat when unit_propagation is enabled (that's the only step that can reduce the clause list to empty or to a single empty clause) -- with unit_propagation absent from the option set, L is always a genuine (possibly still-reducible) clause list.
+cnfify(AST, Optimize, L) :-
+  optimize_opts(Optimize, Opts),
   eliminate(AST, E), % keep basic operators
   distribute(E, CNF), % bring to CNF
   % write(CNF),
   process(CNF, UL),
-  optimize(UL, P),
+  optimize(UL, Opts, P),
   ( is_list(P) -> sort(P, L)
   ; L = P).
+
+optimize_opts(full, [tautology, unit_propagation, pure_literal]) :- !.
+optimize_opts(none, []) :- !.
+optimize_opts(Opts, Opts) :-
+  is_list(Opts), !,
+  ( forall(member(O, Opts), valid_optimize_opt(O)) -> true
+  ; domain_error(optimize_opts, Opts)
+  ).
+optimize_opts(Optimize, _) :-
+  domain_error(optimize_opts, Optimize).
+
+valid_optimize_opt(tautology).
+valid_optimize_opt(unit_propagation).
+valid_optimize_opt(pure_literal).
 
 % eliminate(AST, E) iff E is the boolean expression AST written only with and, or, literals and negated literals
 % base case: literals
@@ -104,35 +133,36 @@ is_negated(not(_)).
 keep_names([], []).
 keep_names([var(A)|T], [A|R]) :- keep_names(T, R).
 keep_names([not(var(A))|T], [A|R]) :- keep_names(T, R).
-% optimize(UL, L) applies Unit Propagation to simplify the CNF clauses
-optimize(UL, L) :-
-  remove_tautologies(UL, RT),
-  optimize_units(RT, [], L).
+% optimize(UL, Opts, L) applies the optimizations named in Opts (a subset of [tautology, unit_propagation, pure_literal]) to simplify the CNF clauses.
+optimize(UL, Opts, L) :-
+  ( memberchk(tautology, Opts) -> remove_tautologies(UL, RT) ; RT = UL ),
+  optimize_units(RT, [], Opts, L).
 
-% optimize_units(RemainingClauses, AccumulatedUnits, FinalClauses)
-optimize_units(RT, Units, L) :-
+% optimize_units(RemainingClauses, AccumulatedUnits, Opts, FinalClauses)
+optimize_units(RT, Units, Opts, L) :-
   ( member([]-[], RT) -> L = unsat
   ; RT = [] ->
       ( Units = [] -> L = sat
       ; append(Units, RT, L)
       )
   % 1. Propagate True Units
-  ; select([]-[A], RT, Rest) ->
+  ; memberchk(unit_propagation, Opts), select([]-[A], RT, Rest) ->
       propagate_true(A, Rest, NewRT),
-      optimize_units(NewRT, [[]-[A]|Units], L)
+      optimize_units(NewRT, [[]-[A]|Units], Opts, L)
   % 2. Propagate False Units
-  ; select([A]-[], RT, Rest) ->
+  ; memberchk(unit_propagation, Opts), select([A]-[], RT, Rest) ->
       propagate_false(A, Rest, NewRT),
-      optimize_units(NewRT, [[A]-[]|Units], L)
+      optimize_units(NewRT, [[A]-[]|Units], Opts, L)
   % 3. Pure Literal Elimination
-  ; gather_literals(RT, AllN, AllS),
+  ; memberchk(pure_literal, Opts),
+    gather_literals(RT, AllN, AllS),
     ord_subtract(AllN, AllS, PureN),
     ord_subtract(AllS, AllN, PureS),
     ( PureN \= [] ; PureS \= [] ) ->
         eliminate_pure(PureN, PureS, RT, NewRT),
         make_units(PureN, PureS, PureUnits),
         append(PureUnits, Units, NewUnits),
-        optimize_units(NewRT, NewUnits, L)
+        optimize_units(NewRT, NewUnits, Opts, L)
   % 4. Done optimizing, return remaining
   ; append(Units, RT, L)
   ).

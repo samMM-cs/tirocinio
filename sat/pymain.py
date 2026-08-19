@@ -1,4 +1,5 @@
 from uuid import uuid4
+from time import perf_counter
 from qiskit import transpile
 from qiskit.circuit import QuantumCircuit, QuantumRegister, ClassicalRegister
 from qiskit_aer import AerSimulator
@@ -9,14 +10,30 @@ from random import randint
 CIRCUITS_CACHE: dict[str, QuantumCircuit] = dict()
 
 
-def run_grover(oracle_id: str, n_vars: int, n_ancillas: int, max_iterations: int) -> list[str]:
-    """Wrapper to run BBHT grover from SWIpl"""
+def run_grover(oracle_id: str, n_vars: int, n_ancillas: int, max_iterations: int) -> tuple[list[str], dict]:
+    """Wrapper to run BBHT grover from SWIpl.
+
+    Returns (bitstrings, metrics) where metrics carries the per-attempt data
+    needed for the resource/scaling evaluation (iterations actually used,
+    simulation wall-clock time, shots, and the full observed-counts histogram).
+    """
     oracle = CIRCUITS_CACHE[oracle_id]  # get the oracle from the cache
     iterations = randint(1, max_iterations)  # get random iteration amount for this bound
     circ = grover(oracle, iterations, n_vars, n_ancillas)  # build circuit
     simulator = AerSimulator()
+    sim_start = perf_counter()
     opt_circ = transpile(circ, backend=simulator, optimization_level=3)  # optimize it for simulation (should not be necessary)
-    return list(simulator.run(opt_circ, shots=16).result().get_counts().keys())  # run and return possibly satisfying bitstrings to SWIpl
+    shots = 16
+    counts = simulator.run(opt_circ, shots=shots).result().get_counts()
+    sim_time = perf_counter() - sim_start
+    metrics = {
+        "iterations_used": iterations,
+        "max_iterations": max_iterations,
+        "sim_time": sim_time,
+        "shots": shots,
+        "counts": dict(counts),
+    }
+    return list(counts.keys()), metrics
 
 
 def grover(oracle: QuantumCircuit, iterations: int, n_vars: int, n_ancillas: int, n_outputs: int = 1) -> QuantumCircuit:
@@ -53,10 +70,18 @@ def grover(oracle: QuantumCircuit, iterations: int, n_vars: int, n_ancillas: int
     return qc
 
 
-def sat_oracle(CNF: list[tuple[list[int], list[int]]], n: int, backend: Backend | None = None) -> QuantumCircuit:
-    """Create a multiple-ancilla sat oracle"""
+def sat_oracle(CNF: list[tuple[list[int], list[int]]], n: int, backend: Backend | None = None) -> tuple[QuantumCircuit, dict]:
+    """Create a multiple-ancilla sat oracle.
+
+    Returns (oracle_opt, metrics) where metrics reports the circuit-resource
+    figures needed for the preprocessing-impact evaluation: qubit/ancilla
+    counts, the (pre-transpile) number of multi-controlled-X gates the
+    construction used, and the transpiled circuit's depth, gate counts and
+    build time.
+    """
+    n_clauses = len(CNF)
     var = QuantumRegister(n, name="var")
-    clauses = QuantumRegister(len(CNF), name="clauses")
+    clauses = QuantumRegister(n_clauses, name="clauses")
     output = QuantumRegister(1, name="out")
     oracle = QuantumCircuit(var, clauses, output)
     # track clause falsification in ancillas
@@ -80,13 +105,27 @@ def sat_oracle(CNF: list[tuple[list[int], list[int]]], n: int, backend: Backend 
         oracle.mcx([var[v] for v in negated + straight], clauses[j])
         for s in straight:
             oracle.x(var[s])
+    mcx_count = oracle.count_ops().get("mcx", 0)  # design-level count, pre-transpile
     if backend is None:
         backend = AerSimulator()
+    build_start = perf_counter()
     oracle_opt = transpile(oracle, backend=backend, optimization_level=3)
-    return oracle_opt
+    build_time = perf_counter() - build_start
+    metrics = {
+        "n_vars": n,
+        "n_clauses": n_clauses,
+        "n_qubits": oracle.num_qubits,
+        "n_ancillas": n_clauses + 1,  # clause ancillas + output qubit
+        "mcx_count": mcx_count,
+        "depth": oracle_opt.depth(),
+        "gate_counts": dict(oracle_opt.count_ops()),
+        "build_time": build_time,
+    }
+    return oracle_opt, metrics
 
 
-def oracle(CNF: list[tuple[list[str], list[str]]]) -> tuple[str, list[str]]:
+def oracle(CNF: list[tuple[list[str], list[str]]]) -> tuple[str, list[str], dict]:
+    # print(CNF)
     name_to_index = {
         name: idx for idx, name in
         enumerate(sorted({name
@@ -100,8 +139,12 @@ def oracle(CNF: list[tuple[list[str], list[str]]]) -> tuple[str, list[str]]:
          [name_to_index[name] for name in right])
         for left, right in CNF
     ]
-    oracle = sat_oracle(CNF_int, len(name_to_index))
+    oracle_circ, metrics = sat_oracle(CNF_int, len(name_to_index))
     names = [t[0] for t in sorted(name_to_index.items(), key=lambda t: t[1])]
     oracle_id = str(uuid4())
-    CIRCUITS_CACHE[oracle_id] = oracle
-    return oracle_id, names
+    CIRCUITS_CACHE[oracle_id] = oracle_circ
+    return oracle_id, names, metrics
+
+
+if __name__ == "__main__":
+    oracle([(["A"], ["A"])])

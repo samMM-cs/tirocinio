@@ -1,3 +1,6 @@
+:- module(main, [sol/2, sol/4]).
+
+
 :- set_prolog_flag(answer_write_options, [quoted(true), portray(true), max_depth(0)]).
 :- use_module('cnf.pro').
 :- use_module('tokenize.pro').
@@ -14,13 +17,31 @@
     )
 )).
 
+% sol(S, A) is the convenience entry point used by the original tests:
+% full preprocessing, metrics discarded. Equivalent to sol(S, full, A, _).
 sol(S, A) :-
+  sol(S, full, A, _).
+
+% sol(S, Preprocess, A, Metrics)
+%
+% Preprocess is `full` (apply cnf.pro's optimize/2 pass: tautology removal,
+% unit propagation, pure literal elimination) or `none` (skip it, to build
+% the oracle from the original, unoptimized CNF for comparison).
+%
+% A is one of:
+%   unsat        - classical preprocessing derived a contradiction (only possible with Preprocess = full; see cnf.pro)
+%   tautology    - classical preprocessing derived the formula is always true (only possible with Preprocess = full; see cnf.pro)
+%   sat(Assign)  - BBHT found and classically verified a satisfying assignment
+%   unknown      - the BBHT iteration budget was exhausted without a verified assignment; this is NOT a proof of unsatisfiability
+%
+% Metrics = metrics(OracleMetrics, Attempts) as returned by quantum/3, or metrics(none, []) when the quantum module was never invoked (unsat/tautology).
+sol(S, Preprocess, A, Metrics) :-
   tokenize(S, TOK),
   parse_sat(TOK, AST),
-  cnfify(AST, CNF),
-  ( CNF = unsat -> A = contradiction
-  ; CNF = sat   -> A = tautology   
-  ;               quantum(CNF, A)).
+  cnfify(AST, Preprocess, CNF),
+  ( CNF = unsat -> A = unsat, Metrics = metrics(none, [])
+  ; CNF = sat   -> A = tautology, Metrics = metrics(none, [])
+  ;               quantum(CNF, A, Metrics)).
 
 test_expr(0, "(!A || B || C) && (A || !C) && (!B)").
 test_expr(1, "A && (B || ~C)").
